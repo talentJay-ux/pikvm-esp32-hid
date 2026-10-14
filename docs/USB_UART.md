@@ -44,6 +44,8 @@ Forward its loopback-only web port through SSH:
 ssh -N -L 127.0.0.1:18940:127.0.0.1:9040 pi@YOUR_PI
 ```
 
-Open `http://127.0.0.1:18940/`. Viewing sends only PING; press the control button explicitly to send input. Click the picture to lock the relative mouse; Esc, tab hiding, or browser focus loss releases control. Browser leases expire after 1.5 seconds even while the Pi continues polling. If UART communication fails, polling stops for two seconds so firmware releases held input, then reconnects without restoring control. Capture restarts automatically when its device returns.
+Open `http://127.0.0.1:18940/`. Viewing sends only PING; press the control button explicitly to send input. Drag the picture like a touchpad to move the relative pointer; tap it to left-click, or use the left/right click buttons. This works without browser pointer locking. Dragging moves the pointer without holding a Windows mouse button. The window button sends Win+Shift+Right to move the active window to the next display. Pointer events are coalesced while requests are pending, preserving key and button ordering instead of accumulating stale movement.
+
+Esc, tab hiding, or browser focus loss releases control. Browser leases expire after 1.5 seconds even while the Pi continues polling. If UART communication fails, polling stops for two seconds so firmware releases held input, then reconnects without restoring control. Capture restarts automatically when its device returns.
 
 Install the provided user service template with your actual Python and device paths. Enable user lingering (`sudo loginctl enable-linger YOUR_USER`) and `systemctl --user enable --now jay-hid.service` so it starts before login and recovers from process failures. No public HTTP listener is needed. The two USB connections alone do not provide a physical power-button relay.
