@@ -3,41 +3,99 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Jay 远程画面</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#101820;color:#eef4f8;font:16px system-ui,sans-serif}main{max-width:1380px;margin:auto;padding:24px}header{display:flex;align-items:center;gap:16px;flex-wrap:wrap}h1{font-size:24px;margin:0 auto 0 0}button{font:inherit;padding:10px 18px;border:1px solid #647686;border-radius:8px;background:#26394a;color:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:default}#state{color:#b5c1cc}p{color:#b5c1cc;line-height:1.5}img{width:100%;aspect-ratio:16/9;object-fit:contain;background:#000;border:2px solid #3e5060;border-radius:10px;outline:none}img.active{border-color:#64ce96}#error{color:#ff9999;min-height:24px}small{display:block;color:#b5c1cc;margin-top:12px}
+*{box-sizing:border-box}body{margin:0;background:#101820;color:#eef4f8;font:16px system-ui,sans-serif}main{max-width:1380px;margin:auto;padding:16px}header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}h1{font-size:22px;margin:0 auto 0 0}button,select{font:inherit;padding:8px 14px;border:1px solid #647686;border-radius:8px;background:#26394a;color:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:default}#state{color:#b5c1cc}p,small{color:#b5c1cc;line-height:1.5}img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#000;border:2px solid #3e5060;border-radius:10px;outline:none;cursor:default}img.active{border-color:#64ce96;cursor:none}#error{color:#ff9999;min-height:24px;margin:8px 0}
 </style>
-<main><header><h1>Jay · HDMI 远程画面</h1><span id="state">正在连接</span><button id="arm" disabled>启用键鼠</button><button id="pause" disabled>暂停控制</button><button id="escape" disabled>发送 Esc</button><button id="login" disabled>Ctrl + Alt + Del</button></header>
-<p>默认只观看。键鼠与 Windows 本地操作共享焦点，启用前请停止本地操作。</p>
-<img id="view" tabindex="0" draggable="false" style="touch-action:none" src="/stream" alt="Jay HDMI 实时画面">
-<p><button id="left" disabled>左键</button> <button id="right" disabled>右键</button> <button id="window" disabled>将当前窗口移到 HDMI</button></p>
-<small id="mouseHelp">启用后拖动画面移动指针，轻点画面点击；按 Esc 暂停控制。</small><p id="error"></p></main>
+<main><header><h1>Jay · HDMI 远程画面</h1><span id="state">正在连接</span>
+<label>帧率 <select id="fps"><option>5</option><option selected>10</option><option>20</option></select></label>
+<button id="arm" disabled>启用键鼠</button><button id="pause" disabled>停止控制</button><button id="cad" disabled>Ctrl + Alt + Del</button><button id="window" disabled>当前窗口移到 HDMI</button></header>
+<p id="error"></p>
+<img id="view" tabindex="0" draggable="false" alt="Jay HDMI 实时画面">
+<small>启用后鼠标指到哪里,远程指针就到哪里,点击、右键、滚轮直接用;键盘(包括 Esc)全部发给远程。点“停止控制”或关闭页面即释放。
+鼠标定位要求 HDMI 是 Windows 的主屏或唯一屏幕(拔掉 DP 即可);Windows 把绝对定位鼠标只映射到主屏。</small></main>
 <script type="module">
-import {InputQueue} from '/input.mjs';
-const view=document.querySelector('#view'), arm=document.querySelector('#arm'), pauseButton=document.querySelector('#pause'), statusLabel=document.querySelector('#state'), error=document.querySelector('#error');
-const escapeButton=document.querySelector('#escape'),loginButton=document.querySelector('#login');
-const leftButton=document.querySelector('#left'),rightButton=document.querySelector('#right'),windowButton=document.querySelector('#window');
-let token=null,pressed=new Set(),drag=null,mouseReady=false;
-async function post(action,data={},lease=token){const r=await fetch('/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,token:lease})});const d=await r.json();if(!r.ok)throw Error(d.error);return d}
-const queue=new InputQueue((data,lease)=>post('input',data,lease),()=>token,(e,lease)=>{if(token===lease){error.textContent=e.message;pause()}});
-function clearLocal(){token=null;pressed.clear();drag=null;queue.clear();view.classList.remove('active');arm.disabled=true;for(const b of [pauseButton,escapeButton,loginButton,leftButton,rightButton,windowButton])b.disabled=true;}
-function pause(){const previous=token;clearLocal();if(previous)fetch('/pause',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:previous})}).catch(()=>{})}
-function input(data){queue.push(data)}
-arm.onclick=async()=>{try{const d=await post('arm');token=d.token;arm.disabled=true;for(const b of [pauseButton,escapeButton,loginButton])b.disabled=false;for(const b of [leftButton,rightButton,windowButton])b.disabled=!mouseReady;view.classList.add('active');view.focus();error.textContent=''}catch(e){error.textContent=e.message}};
-pauseButton.onclick=pause;
-function chord(names){for(const name of names)input({kind:'key',code:keys[name],down:true});for(const name of [...names].reverse())input({kind:'key',code:keys[name],down:false});view.focus()}
-escapeButton.onclick=()=>chord(['Escape']);loginButton.onclick=()=>chord(['ControlLeft','AltLeft','Delete']);
-function clickRemote(button){input({kind:'button',button,down:true});input({kind:'button',button,down:false});view.focus()}
-leftButton.onclick=()=>clickRemote(0);rightButton.onclick=()=>clickRemote(2);windowButton.onclick=()=>chord(['MetaLeft','ShiftLeft','ArrowRight']);
-view.addEventListener('pointerdown',e=>{if(!token||!mouseReady||e.button!==0)return;e.preventDefault();view.focus();drag={id:e.pointerId,x:e.clientX,y:e.clientY,moved:false};if(typeof view.setPointerCapture==='function')view.setPointerCapture(e.pointerId)});
-view.addEventListener('pointermove',e=>{if(!token||!drag||drag.id!==e.pointerId)return;const dx=Math.round(e.clientX-drag.x),dy=Math.round(e.clientY-drag.y);drag.x=e.clientX;drag.y=e.clientY;if(dx||dy){drag.moved=true;input({kind:'move',dx:Math.max(-127,Math.min(127,dx)),dy:Math.max(-127,Math.min(127,dy))})}});
-document.addEventListener('pointerup',e=>{if(!drag||drag.id!==e.pointerId)return;const moved=drag.moved;drag=null;if(!moved)clickRemote(0)});
-view.addEventListener('pointercancel',()=>{drag=null});
-view.oncontextmenu=e=>e.preventDefault();
-view.addEventListener('wheel',e=>{if(token&&mouseReady){e.preventDefault();input({kind:'wheel',dy:e.deltaY>0?-1:1})}},{passive:false});
-let keys={};fetch('/keymap').then(r=>r.json()).then(d=>{keys=d}).catch(e=>{error.textContent='键盘映射载入失败'}) ;
-view.addEventListener('keydown',e=>{if(!token)return;if(e.code==='Escape'){e.preventDefault();pause();return}if(keys[e.code]&&!e.repeat){e.preventDefault();pressed.add(e.code);input({kind:'key',code:keys[e.code],down:true})}});
-document.addEventListener('keyup',e=>{if(token&&pressed.delete(e.code)){e.preventDefault();input({kind:'key',code:keys[e.code],down:false})}});
-window.addEventListener('blur',pause);document.addEventListener('visibilitychange',()=>{if(document.hidden)pause()});
-setInterval(async()=>{if(token)try{await post('heartbeat')}catch(e){error.textContent=e.message;pause()}},500);
-setInterval(async()=>{try{const s=await(await fetch('/status')).json();const online=s.usb_connected&&s.keyboard_online&&!s.error;mouseReady=!!s.mouse_online;statusLabel.textContent=s.error?'控制连接中断':online?(s.keyboard_boot_protocol?'画面与 BIOS 键盘在线':s.video_ready?'画面与键鼠在线':'键鼠在线 · 等待画面'):s.usb_connected?'USB 已连接 · 等待主机接受键盘':(s.video_ready?'画面在线 · Windows USB 未连接':'等待画面与 Windows USB');statusLabel.style.color=s.error?'#ff9999':online?'#64ce96':'#b5c1cc';if(token&&!s.armed)clearLocal();if(!token)arm.disabled=!online||!keys.Enter;else for(const b of [leftButton,rightButton,windowButton])b.disabled=!mouseReady;document.querySelector('#mouseHelp').textContent=s.keyboard_boot_protocol?'BIOS Boot 模式：点击画面后使用 Tab、方向键和 Enter 导航；按 Esc 暂停控制。':'启用后拖动画面移动指针，轻点画面点击；按 Esc 暂停控制。';if(s.error)error.textContent=s.error;else error.textContent=''}catch(e){statusLabel.textContent='连接中断';statusLabel.style.color='#ff9999';pause()}},1000);
+import {toAbsolute, LatestMotion} from '/pointer.mjs';
+const $ = id => document.getElementById(id);
+const view = $('view'), arm = $('arm'), pauseButton = $('pause'), statusLabel = $('state'), error = $('error'), fps = $('fps');
+let socket = null, keys = {}, pressed = new Set(), buttons = new Set(), mouseReady = false, pinger = null;
+const controlling = () => socket?.readyState === WebSocket.OPEN;
+const send = data => { if (controlling()) socket.send(JSON.stringify(data)); };
+const motion = new LatestMotion(p => send({kind: 'abs', ...p}), () => socket.bufferedAmount > 512);
+(function pump() { if (controlling()) motion.flush(); requestAnimationFrame(pump); })();
+
+try { fps.value = localStorage.getItem('jay-fps') || fps.value; } catch {}
+const startStream = () => { view.src = '/stream?fps=' + fps.value; };
+fps.onchange = () => { try { localStorage.setItem('jay-fps', fps.value); } catch {} startStream(); };
+startStream();
+fetch('/keymap').then(r => r.json()).then(d => { keys = d; }).catch(() => { error.textContent = '键盘映射载入失败'; });
+
+function releaseHeld() {
+  for (const code of pressed) send({kind: 'key', code: keys[code], down: false});
+  for (const button of buttons) send({kind: 'button', button, down: false});
+  pressed.clear(); buttons.clear();
+}
+function setControls(on) {
+  view.classList.toggle('active', on);
+  arm.disabled = on; pauseButton.disabled = !on; $('cad').disabled = !on; $('window').disabled = !on;
+}
+function stop() {
+  releaseHeld(); motion.clear(); clearInterval(pinger);
+  if (socket) socket.close();
+  socket = null; setControls(false);
+}
+arm.onclick = () => {
+  error.textContent = '';
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  socket = ws;
+  ws.onmessage = event => {
+    const message = JSON.parse(event.data);
+    if (message.type === 'armed') { setControls(true); view.focus(); pinger = setInterval(() => send({kind: 'ping'}), 500); }
+    else if (message.type === 'error') error.textContent = message.error;
+  };
+  ws.onclose = () => { if (socket === ws) stop(); };
+};
+pauseButton.onclick = stop;
+function chord(names) {
+  for (const name of names) send({kind: 'key', code: keys[name], down: true});
+  for (const name of [...names].reverse()) send({kind: 'key', code: keys[name], down: false});
+  view.focus();
+}
+$('cad').onclick = () => chord(['ControlLeft', 'AltLeft', 'Delete']);
+$('window').onclick = () => chord(['MetaLeft', 'ShiftLeft', 'ArrowRight']);
+
+const position = e => view.naturalWidth ? toAbsolute(view.getBoundingClientRect(), {width: view.naturalWidth, height: view.naturalHeight}, e.clientX, e.clientY) : null;
+view.addEventListener('pointermove', e => { if (controlling() && mouseReady) { const p = position(e); if (p) motion.push(p); } });
+view.addEventListener('pointerdown', e => {
+  if (!controlling() || !mouseReady || ![0, 1, 2].includes(e.button)) return;
+  e.preventDefault(); view.focus();
+  const p = position(e); if (!p) return;
+  motion.clear(); send({kind: 'abs', ...p});  // land on the clicked point first
+  buttons.add(e.button); send({kind: 'button', button: e.button, down: true});
+});
+document.addEventListener('pointerup', e => { if (buttons.delete(e.button)) send({kind: 'button', button: e.button, down: false}); });
+view.oncontextmenu = e => e.preventDefault();
+view.addEventListener('wheel', e => { if (controlling() && mouseReady) { e.preventDefault(); send({kind: 'wheel', dy: e.deltaY > 0 ? -1 : 1}); } }, {passive: false});
+view.addEventListener('keydown', e => {
+  if (!controlling() || !keys[e.code]) return;
+  e.preventDefault();
+  if (e.repeat || pressed.has(e.code)) return;
+  pressed.add(e.code); send({kind: 'key', code: keys[e.code], down: true});
+});
+document.addEventListener('keyup', e => { if (pressed.delete(e.code)) { e.preventDefault(); send({kind: 'key', code: keys[e.code], down: false}); } });
+// Leaving the page must not leave a key held on the remote; control stays on.
+window.addEventListener('blur', releaseHeld);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseHeld(); });
+
+setInterval(async () => {
+  try {
+    const s = await (await fetch('/status')).json();
+    const online = s.usb_connected && s.keyboard_online && !s.error;
+    mouseReady = !!s.mouse_online && s.mouse_mode === 8;
+    statusLabel.textContent = s.error ? '控制连接中断' : !online ? (s.video_ready ? '画面在线 · Windows USB 未连接' : '等待画面与 Windows USB')
+      : s.keyboard_boot_protocol ? 'BIOS 模式:只有键盘(Tab、方向键、Enter)' : mouseReady ? '画面与键鼠在线' : '画面与键盘在线 · 鼠标不可用';
+    statusLabel.style.color = s.error ? '#ff9999' : online ? '#64ce96' : '#b5c1cc';
+    if (!controlling()) arm.disabled = !online || !keys.Enter || (s.armed && !socket);
+    if (s.error) error.textContent = s.error;
+  } catch { statusLabel.textContent = '连接中断'; statusLabel.style.color = '#ff9999'; }
+}, 1000);
 </script>
 </html>
