@@ -189,6 +189,8 @@ def run(args):
                 self.send(200, json.dumps(state).encode())
             elif self.path == "/keymap":
                 self.send(200, Path(__file__).with_name("keymap.json").read_bytes())
+            elif self.path == "/input.mjs":
+                self.send(200, Path(__file__).with_name("input.mjs").read_bytes(), "text/javascript")
             elif self.path == "/frame.jpg":
                 self.send(200 if video.frame else 503, video.frame or b"", "image/jpeg")
             elif self.path == "/stream":
