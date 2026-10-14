@@ -49,11 +49,13 @@ class Peer:
         import serial
 
         self.serial = serial.Serial(port=None, baudrate=115200, timeout=0.1)
-        # Set these before opening: opening the devkit bridge must not reset it.
+        # Avoid deliberately asserting reset. Some USB-UART drivers still
+        # pulse the board while opening; let ROM/setup finish before PING.
         self.serial.dtr = False
         self.serial.rts = False
         self.serial.port = port
         self.serial.open()
+        time.sleep(0.75)
 
     def command(self, code, payload=b""):
         self.serial.reset_input_buffer()
