@@ -69,6 +69,20 @@ class ProtocolTests(unittest.TestCase):
             hidctl.main(["--port", "unused", "--allow-input", "move", "-5", "3"], peer_factory=lambda _: peer)
         self.assertEqual(peer.commands[-1], (0x15, b"\xfb\x03"))
 
+    @unittest.skipUnless(hasattr(hidctl, "termios"), "POSIX USB UART test")
+    def test_usb_detach_tcdrain_error_becomes_reconnectable_protocol_error(self):
+        class DisconnectedSerial:
+            def reset_input_buffer(self):
+                pass
+            def write(self, frame):
+                pass
+            def flush(self):
+                raise hidctl.termios.error(5, "Input/output error")
+        peer = object.__new__(hidctl.Peer)
+        peer.serial = DisconnectedSerial()
+        with self.assertRaises(hidctl.ProtocolError):
+            peer.command(1)
+
     def test_absolute_descriptor_has_its_own_report_id(self):
         # USB HID item parser verifies the actual firmware descriptor rather than
         # duplicating it: ID 3 has 48 input bits (buttons + X/Y + wheel).

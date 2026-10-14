@@ -6,6 +6,12 @@ import json
 import struct
 import time
 
+try:
+    import termios
+    UART_ERRORS = (OSError, termios.error)
+except ImportError:
+    UART_ERRORS = (OSError,)
+
 
 class ProtocolError(RuntimeError):
     pass
@@ -58,6 +64,12 @@ class Peer:
         time.sleep(0.75)
 
     def command(self, code, payload=b""):
+        try:
+            return self._command(code, payload)
+        except UART_ERRORS as error:
+            raise ProtocolError(f"Serial communication failed: {error}") from error
+
+    def _command(self, code, payload=b""):
         self.serial.reset_input_buffer()
         self.serial.write(request(code, payload))
         self.serial.flush()
