@@ -1,5 +1,5 @@
-// config.h.example — copy to config.h and fill in your values
-// src/config.h is gitignored — never commit the real credentials file
+// wifi_config.h.example — copy to wifi_config.h and fill in your values
+// src/wifi_config.h is gitignored — never commit the real credentials file
 #pragma once
 
 #define WIFI_SSID       "your-wifi-ssid"

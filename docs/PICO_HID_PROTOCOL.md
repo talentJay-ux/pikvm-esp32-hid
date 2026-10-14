@@ -314,9 +314,9 @@ inline void ph_split16(u16 from, u8 *to_a, u8 *to_b) {
 ### 3.5 Quick CRC sanity vector
 
 Given the canonical PING request (`req = 0x33 0x01 0x00 0x00 0x00 0x00 ?? ??`):
-- CRC-16/MODBUS over `33 01 00 00 00 00` = `0xC1C0`
-- Wire bytes 6, 7 = `0xC1`, `0xC0`
-- Full PING frame = **`33 01 00 00 00 00 C1 C0`**
+- CRC-16/MODBUS over `33 01 00 00 00 00` = `0x1838`
+- Wire bytes 6, 7 = `0x18`, `0x38`
+- Full PING frame = **`33 01 00 00 00 00 18 38`**
 
 (Verified by running the `make_crc16` reference function above against the listed bytes.) Use this exact byte sequence as the first integration checkpoint when bringing up the firmware: PiKVM's `kvmd` issues PING any time the event queue is empty, so it will arrive within ~100 ms of any successful connection.
 
@@ -370,7 +370,7 @@ Where `HANDLE(fn, x_reset)` calls `fn(data + 2)` (i.e., the 5-byte payload start
 | 2..6    | `0x00`  |
 | 6..8    | CRC-16  |
 
-Canonical bytes: `33 01 00 00 00 00 C1 C0`.
+Canonical bytes: `33 01 00 00 00 00 18 38`.
 
 Action: none. Response: `PONG_OK` with current state (see §5).
 
@@ -1096,7 +1096,7 @@ If you discover an ESP32 port mid-build, prefer it over a fresh implementation o
 ## Appendix A: Bring-up checklist for the ESP32-S3 firmware
 
 1. Wire UART2 (or any free UART instance) RX to Pi BCM GPIO14 (TX), TX to Pi BCM GPIO15 (RX), GND common, 115200 8N1.
-2. Implement the CRC-16 from §3.4 — verify against `33 01 00 00 00 00 → CRC C1 C0`.
+2. Implement the CRC-16 from §3.4 — verify against `33 01 00 00 00 00 → CRC 18 38`.
 3. Implement the 8-byte fixed parser with 100 ms inter-byte timeout (§7.2).
 4. Reply to PING with `34 89 89 01 00 00 <CRC_HI> <CRC_LO>` (status = PONG_OK + dynamic+kbd_usb+mouse_usb_abs, outputs2 = HAS_USB). This is kvmd's heartbeat — get this working first; the kvmd UI should flip "online".
 5. Wire up TinyUSB or `tinyusb_hid_*` (ESP32-S3 native USB OTG) with the descriptors in §6. Don't use `usb_hid_keyboard_ll` shortcuts — kvmd parses USB enumeration via the OS, but the *target* PC needs the exact descriptors above for boot keyboard support.

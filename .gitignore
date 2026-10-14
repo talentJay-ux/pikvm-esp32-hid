@@ -3,3 +3,6 @@
 .DS_Store
 *.log
 src/config.h
+src/wifi_config.h
+__pycache__/
+*.pyc
