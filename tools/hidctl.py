@@ -40,7 +40,7 @@ def response(frame):
         raise ProtocolError("Response CRC mismatch")
     if not frame[1] & 0x80:
         raise ProtocolError(f"Device rejected command: 0x{frame[1]:02x}")
-    return {
+    result = {
         "status": frame[1],
         "keyboard_mode": frame[2] & 7,
         "mouse_mode": frame[2] & 0x38,
@@ -48,6 +48,9 @@ def response(frame):
         "keyboard_online": not bool(frame[1] & 8),
         "mouse_online": not bool(frame[1] & 0x10),
     }
+    if frame[4] & 0x80:
+        result.update(usb_suspended=bool(frame[4] & 1), input_ready=bool(frame[4] & 2), keyboard_boot_protocol=bool(frame[4] & 4))
+    return result
 
 
 class Peer:

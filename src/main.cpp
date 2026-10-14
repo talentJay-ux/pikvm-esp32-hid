@@ -14,9 +14,6 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include "USB.h"
-#include "USBHIDKeyboard.h"
-#include "USBHIDMouse.h"
-#include "USBHID.h"
 #include "tusb.h"
 #include "esp_mac.h"
 
@@ -120,21 +117,7 @@ static const uint8_t abs_mouse_report_desc[] = {
 
 #define HID_REPORT_ID_ABS_MOUSE 3
 
-class AbsMouse : public USBHIDDevice {
-public:
-    USBHID hid;
-    AbsMouse() {}
-    void begin() { hid.addDevice(this, sizeof(abs_mouse_report_desc)); }
-    uint16_t _onGetDescriptor(uint8_t *dst) {
-        memcpy(dst, abs_mouse_report_desc, sizeof(abs_mouse_report_desc));
-        return sizeof(abs_mouse_report_desc);
-    }
-    bool send(uint8_t buttons, uint16_t x, uint16_t y, int8_t wheel) {
-        uint8_t r[6] = { buttons, (uint8_t)(x & 0xFF), (uint8_t)(x >> 8),
-                         (uint8_t)(y & 0xFF), (uint8_t)(y >> 8), (uint8_t)wheel };
-        return hid.SendReport(HID_REPORT_ID_ABS_MOUSE, r, sizeof(r));
-    }
-};
+#include "boot_hid.h"
 
 // ---- MCU Code -> USB HID Usage Lookup ----
 static const uint8_t mcu_to_usb[116] = {
@@ -154,8 +137,8 @@ static const uint8_t mcu_to_usb[116] = {
 
 // ---- Global State ----
 static Preferences prefs;
-static USBHIDKeyboard Keyboard;
-static USBHIDMouse RelMouse;
+static BootKeyboard Keyboard;
+static BootRelativeMouse RelMouse;
 static AbsMouse AbsMouseDev;
 
 static uint8_t active_kbd_mode   = OUT1_KBD_USB;
@@ -194,30 +177,28 @@ static uint16_t crc16_modbus(const uint8_t *buf, size_t len) {
 }
 
 // ---- USB HID send functions ----
-static void send_kbd_report() {
-    if (!tud_mounted()) return;
+static bool send_kbd_report() {
+    if (!tud_mounted()) return false;
     if (humanize_enabled) delayMicroseconds(esp_random() % 3000);
     KeyReport report;
     report.modifiers = kbd_mods;
     report.reserved = 0;
     memcpy(report.keys, kbd_keys, 6);
-    Keyboard.sendReport(&report);
+    return Keyboard.sendReport(&report);
 }
 
-static void send_abs_mouse_report(int8_t wheel) {
-    if (!tud_mounted()) return;
+static bool send_abs_mouse_report(int8_t wheel) {
+    if (!tud_mounted()) return false;
     if (humanize_enabled) delayMicroseconds(esp_random() % 3000);
     uint16_t x = (uint16_t)(((int32_t)mouse_abs_x + 32768) / 2);
     uint16_t y = (uint16_t)(((int32_t)mouse_abs_y + 32768) / 2);
-    AbsMouseDev.send(mouse_buttons, x, y, wheel);
+    return AbsMouseDev.send(mouse_buttons, x, y, wheel);
 }
 
-static void send_rel_mouse_report(int8_t dx, int8_t dy, int8_t wheel) {
-    if (!tud_mounted()) return;
+static bool send_rel_mouse_report(int8_t dx, int8_t dy, int8_t wheel) {
+    if (!tud_mounted()) return false;
     if (humanize_enabled) delayMicroseconds(esp_random() % 3000);
-    RelMouse.release((uint8_t)(~mouse_buttons));
-    RelMouse.press(mouse_buttons);
-    RelMouse.move(dx, dy, wheel);
+    return RelMouse.send(mouse_buttons, dx, dy, wheel);
 }
 
 static bool input_is_held() {
@@ -235,10 +216,10 @@ static void clear_all_hid() {
     else if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_REL) send_rel_mouse_report(0, 0, 0);
 }
 
-static void handle_kbd_key(uint8_t mcu_code, uint8_t state) {
-    if (mcu_code == 0 || mcu_code > 115) return;
+static bool handle_kbd_key(uint8_t mcu_code, uint8_t state) {
+    if (mcu_code == 0 || mcu_code > 115) return false;
     uint8_t usb_key = mcu_to_usb[mcu_code];
-    if (usb_key == 0) return;
+    if (usb_key == 0) return false;
     if (usb_key >= 0xE0 && usb_key <= 0xE7) {
         uint8_t mod_bit = 1 << (usb_key & 0x07);
         if (state) kbd_mods |= mod_bit; else kbd_mods &= ~mod_bit;
@@ -250,17 +231,18 @@ static void handle_kbd_key(uint8_t mcu_code, uint8_t state) {
         }
         else { for (int i = 0; i < 6; i++) { if (kbd_keys[i] == usb_key) { kbd_keys[i] = 0; break; } } }
     }
-    send_kbd_report();
+    return send_kbd_report();
 }
 
-static void handle_mouse_button(uint8_t m, uint8_t e) {
+static bool handle_mouse_button(uint8_t m, uint8_t e) {
     if (m & BTN_LEFT_SELECT)   { if (m & BTN_LEFT_STATE) mouse_buttons |= 0x01; else mouse_buttons &= ~0x01; }
     if (m & BTN_RIGHT_SELECT)  { if (m & BTN_RIGHT_STATE) mouse_buttons |= 0x02; else mouse_buttons &= ~0x02; }
     if (m & BTN_MIDDLE_SELECT) { if (m & BTN_MIDDLE_STATE) mouse_buttons |= 0x04; else mouse_buttons &= ~0x04; }
     if (e & BTN_BACKWARD_SELECT) { if (e & BTN_BACKWARD_STATE) mouse_buttons |= 0x08; else mouse_buttons &= ~0x08; }
     if (e & BTN_FORWARD_SELECT)  { if (e & BTN_FORWARD_STATE) mouse_buttons |= 0x10; else mouse_buttons &= ~0x10; }
-    if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_ABS) send_abs_mouse_report(0);
-    else if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_REL) send_rel_mouse_report(0, 0, 0);
+    if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_ABS) return send_abs_mouse_report(0);
+    if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_REL) return send_rel_mouse_report(0, 0, 0);
+    return false;
 }
 
 static void load_output_modes() { prefs.begin(PREFS_NAMESPACE, true); active_kbd_mode = prefs.getUChar("kbd_mode", OUT1_KBD_USB); active_mouse_mode = prefs.getUChar("mouse_mode", DEFAULT_MOUSE_MODE); humanize_enabled = prefs.getBool("humanize", false); prefs.end(); }
@@ -274,13 +256,17 @@ static void send_response(uint8_t code) {
     if (code & PONG_OK) {
         resp[1] = PONG_OK;
         if (reset_required) resp[1] |= PONG_RESET_REQUIRED;
+        kbd_leds = BootHid::leds;
         if (kbd_leds & 0x01) resp[1] |= PONG_NUM;
         if (kbd_leds & 0x02) resp[1] |= PONG_CAPS;
         if (kbd_leds & 0x04) resp[1] |= PONG_SCROLL;
-        if (!tud_mounted()) resp[1] |= PONG_KBD_OFFLINE | PONG_MOUSE_OFFLINE;
+        if (!tud_mounted() || tud_suspended()) resp[1] |= PONG_KBD_OFFLINE | PONG_MOUSE_OFFLINE;
+        if (BootHid::boot()) resp[1] |= PONG_MOUSE_OFFLINE;
         resp[2] = OUT1_DYNAMIC | (active_kbd_mode & OUT1_KBD_MASK) | (active_mouse_mode & OUT1_MOUSE_MASK);
         resp[3] = OUT2_CONNECTABLE | OUT2_HAS_USB;
         if (tud_mounted()) resp[3] |= OUT2_CONNECTED;
+        // Extension marker keeps old hosts compatible with these reserved bytes.
+        resp[4] = 0x80 | (tud_suspended() ? 1 : 0) | (tud_hid_ready() ? 2 : 0) | (BootHid::boot() ? 4 : 0);
     } else {
         resp[1] = code;
     }
@@ -306,18 +292,19 @@ static void handle_packet(const uint8_t *data) {
         case CMD_SET_MOUSE: active_mouse_mode = args[0] & OUT1_MOUSE_MASK; save_output_modes(); reset_required = true; send_response(PONG_OK); reset_scheduled_at = millis(); break;
         case CMD_SET_CONNECTED: send_response(PONG_OK); break;
         case CMD_CLEAR_HID: clear_all_hid(); send_response(PONG_OK); break;
-        case CMD_KBD_KEY: if ((active_kbd_mode & OUT1_KBD_MASK) == OUT1_KBD_USB) handle_kbd_key(args[0], args[1]); send_response(PONG_OK); break;
+        case CMD_KBD_KEY: send_response((active_kbd_mode & OUT1_KBD_MASK) == OUT1_KBD_USB && handle_kbd_key(args[0], args[1]) ? PONG_OK : RESP_INVALID_ERROR); break;
         case CMD_MOUSE_ABS:
-            if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_ABS) { mouse_abs_x = (int16_t)(((uint16_t)args[0] << 8) | args[1]); mouse_abs_y = (int16_t)(((uint16_t)args[2] << 8) | args[3]); send_abs_mouse_report(0); }
-            send_response(PONG_OK); break;
-        case CMD_MOUSE_BUTTON: handle_mouse_button(args[0], args[1]); send_response(PONG_OK); break;
+            if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_ABS) { mouse_abs_x = (int16_t)(((uint16_t)args[0] << 8) | args[1]); mouse_abs_y = (int16_t)(((uint16_t)args[2] << 8) | args[3]); send_response(send_abs_mouse_report(0) ? PONG_OK : RESP_INVALID_ERROR); }
+            else send_response(RESP_INVALID_ERROR);
+            break;
+        case CMD_MOUSE_BUTTON: send_response(handle_mouse_button(args[0], args[1]) ? PONG_OK : RESP_INVALID_ERROR); break;
         case CMD_MOUSE_WHEEL:
-            if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_ABS) send_abs_mouse_report((int8_t)args[1]);
-            else if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_REL) send_rel_mouse_report(0, 0, (int8_t)args[1]);
-            send_response(PONG_OK); break;
+            if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_ABS) send_response(send_abs_mouse_report((int8_t)args[1]) ? PONG_OK : RESP_INVALID_ERROR);
+            else if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_REL) send_response(send_rel_mouse_report(0, 0, (int8_t)args[1]) ? PONG_OK : RESP_INVALID_ERROR);
+            else send_response(RESP_INVALID_ERROR);
+            break;
         case CMD_MOUSE_REL:
-            if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_REL) send_rel_mouse_report((int8_t)args[0], (int8_t)args[1], 0);
-            send_response(PONG_OK); break;
+            send_response((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_REL && send_rel_mouse_report((int8_t)args[0], (int8_t)args[1], 0) ? PONG_OK : RESP_INVALID_ERROR); break;
         case CMD_HUMANIZE:
             humanize_enabled = (args[0] != 0);
             save_output_modes();
@@ -343,9 +330,11 @@ void setup() {
     USB.manufacturerName("PiKVM");
     USB.productName("PiKVM ESP32-S3 HID");
     USB.serialNumber(serial_str);
-    Keyboard.begin();
-    AbsMouseDev.begin();
-    RelMouse.begin();
+    USB.usbClass(0);
+    USB.usbSubClass(0);
+    USB.usbProtocol(0);
+    USB.firmwareVersion(0x0201);
+    BootHid::begin();
     USB.begin();
 
 #if !defined(PIKVM_CONTROL_USB_UART)

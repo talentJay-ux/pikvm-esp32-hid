@@ -11,6 +11,8 @@ Keep the Pi independently powered. Connect the target PC HDMI output to the capt
 
 This build exposes `PiKVM ESP32-S3 HID` (VID 1209, PID EDA2), defaults to relative mouse, and does not type or move the pointer on boot. UART0 contains protocol responses without debug logs. Held keys/buttons are released after 1.5 seconds without a valid packet, or when the USB target disconnects. Hold sessions must send periodic PING requests; malformed packets do not renew the timeout.
 
+The HID interface advertises Boot Keyboard support. When BIOS selects boot protocol, keyboard packets contain eight bytes without a report-ID prefix; use Tab, arrows and Enter for BIOS navigation. Mouse controls are unavailable in keyboard boot protocol. Report protocol retains keyboard ID 1, relative mouse ID 2 and absolute mouse ID 3 for the operating system. Failed HID sends return an error instead of acknowledging unsent input. Status extensions expose suspension, endpoint readiness and boot protocol when supported by the firmware.
+
 Opening some USB-UART bridges briefly resets the board, even with DTR/RTS deasserted. The host waits 750 ms for setup before its first command. Keep one service owning the serial port; do not run the CLI while the web service is active.
 
 Install `pyserial` in a Pi virtual environment, identify the bridge under `/dev/serial/by-id/`, and run:

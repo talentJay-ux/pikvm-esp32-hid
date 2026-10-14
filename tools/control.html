@@ -15,29 +15,29 @@ import {InputQueue} from '/input.mjs';
 const view=document.querySelector('#view'), arm=document.querySelector('#arm'), pauseButton=document.querySelector('#pause'), statusLabel=document.querySelector('#state'), error=document.querySelector('#error');
 const escapeButton=document.querySelector('#escape'),loginButton=document.querySelector('#login');
 const leftButton=document.querySelector('#left'),rightButton=document.querySelector('#right'),windowButton=document.querySelector('#window');
-let token=null,pressed=new Set(),drag=null;
+let token=null,pressed=new Set(),drag=null,mouseReady=false;
 async function post(action,data={},lease=token){const r=await fetch('/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,token:lease})});const d=await r.json();if(!r.ok)throw Error(d.error);return d}
 const queue=new InputQueue((data,lease)=>post('input',data,lease),()=>token,(e,lease)=>{if(token===lease){error.textContent=e.message;pause()}});
 function clearLocal(){token=null;pressed.clear();drag=null;queue.clear();view.classList.remove('active');arm.disabled=true;for(const b of [pauseButton,escapeButton,loginButton,leftButton,rightButton,windowButton])b.disabled=true;}
 function pause(){const previous=token;clearLocal();if(previous)fetch('/pause',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:previous})}).catch(()=>{})}
 function input(data){queue.push(data)}
-arm.onclick=async()=>{try{const d=await post('arm');token=d.token;arm.disabled=true;for(const b of [pauseButton,escapeButton,loginButton,leftButton,rightButton,windowButton])b.disabled=false;view.classList.add('active');view.focus();error.textContent=''}catch(e){error.textContent=e.message}};
+arm.onclick=async()=>{try{const d=await post('arm');token=d.token;arm.disabled=true;for(const b of [pauseButton,escapeButton,loginButton])b.disabled=false;for(const b of [leftButton,rightButton,windowButton])b.disabled=!mouseReady;view.classList.add('active');view.focus();error.textContent=''}catch(e){error.textContent=e.message}};
 pauseButton.onclick=pause;
 function chord(names){for(const name of names)input({kind:'key',code:keys[name],down:true});for(const name of [...names].reverse())input({kind:'key',code:keys[name],down:false});view.focus()}
 escapeButton.onclick=()=>chord(['Escape']);loginButton.onclick=()=>chord(['ControlLeft','AltLeft','Delete']);
 function clickRemote(button){input({kind:'button',button,down:true});input({kind:'button',button,down:false});view.focus()}
 leftButton.onclick=()=>clickRemote(0);rightButton.onclick=()=>clickRemote(2);windowButton.onclick=()=>chord(['MetaLeft','ShiftLeft','ArrowRight']);
-view.addEventListener('pointerdown',e=>{if(!token||e.button!==0)return;e.preventDefault();view.focus();drag={id:e.pointerId,x:e.clientX,y:e.clientY,moved:false};if(typeof view.setPointerCapture==='function')view.setPointerCapture(e.pointerId)});
+view.addEventListener('pointerdown',e=>{if(!token||!mouseReady||e.button!==0)return;e.preventDefault();view.focus();drag={id:e.pointerId,x:e.clientX,y:e.clientY,moved:false};if(typeof view.setPointerCapture==='function')view.setPointerCapture(e.pointerId)});
 view.addEventListener('pointermove',e=>{if(!token||!drag||drag.id!==e.pointerId)return;const dx=Math.round(e.clientX-drag.x),dy=Math.round(e.clientY-drag.y);drag.x=e.clientX;drag.y=e.clientY;if(dx||dy){drag.moved=true;input({kind:'move',dx:Math.max(-127,Math.min(127,dx)),dy:Math.max(-127,Math.min(127,dy))})}});
 document.addEventListener('pointerup',e=>{if(!drag||drag.id!==e.pointerId)return;const moved=drag.moved;drag=null;if(!moved)clickRemote(0)});
 view.addEventListener('pointercancel',()=>{drag=null});
 view.oncontextmenu=e=>e.preventDefault();
-view.addEventListener('wheel',e=>{if(token){e.preventDefault();input({kind:'wheel',dy:e.deltaY>0?-1:1})}},{passive:false});
+view.addEventListener('wheel',e=>{if(token&&mouseReady){e.preventDefault();input({kind:'wheel',dy:e.deltaY>0?-1:1})}},{passive:false});
 let keys={};fetch('/keymap').then(r=>r.json()).then(d=>{keys=d}).catch(e=>{error.textContent='键盘映射载入失败'}) ;
 view.addEventListener('keydown',e=>{if(!token)return;if(e.code==='Escape'){e.preventDefault();pause();return}if(keys[e.code]&&!e.repeat){e.preventDefault();pressed.add(e.code);input({kind:'key',code:keys[e.code],down:true})}});
 document.addEventListener('keyup',e=>{if(token&&pressed.delete(e.code)){e.preventDefault();input({kind:'key',code:keys[e.code],down:false})}});
 window.addEventListener('blur',pause);document.addEventListener('visibilitychange',()=>{if(document.hidden)pause()});
 setInterval(async()=>{if(token)try{await post('heartbeat')}catch(e){error.textContent=e.message;pause()}},500);
-setInterval(async()=>{try{const s=await(await fetch('/status')).json();const online=s.usb_connected&&!s.error;statusLabel.textContent=s.error?'控制连接中断':online?(s.video_ready?'画面与键鼠在线':'键鼠在线 · 等待画面'):(s.video_ready?'画面在线 · Windows USB 未连接':'等待画面与 Windows USB');statusLabel.style.color=s.error?'#ff9999':online?'#64ce96':'#b5c1cc';if(token&&!s.armed)clearLocal();if(!token)arm.disabled=!online||!keys.Enter;if(s.error)error.textContent=s.error;else error.textContent=''}catch(e){statusLabel.textContent='连接中断';statusLabel.style.color='#ff9999';pause()}},1000);
+setInterval(async()=>{try{const s=await(await fetch('/status')).json();const online=s.usb_connected&&s.keyboard_online&&!s.error;mouseReady=!!s.mouse_online;statusLabel.textContent=s.error?'控制连接中断':online?(s.keyboard_boot_protocol?'画面与 BIOS 键盘在线':s.video_ready?'画面与键鼠在线':'键鼠在线 · 等待画面'):s.usb_connected?'USB 已连接 · 等待主机接受键盘':(s.video_ready?'画面在线 · Windows USB 未连接':'等待画面与 Windows USB');statusLabel.style.color=s.error?'#ff9999':online?'#64ce96':'#b5c1cc';if(token&&!s.armed)clearLocal();if(!token)arm.disabled=!online||!keys.Enter;else for(const b of [leftButton,rightButton,windowButton])b.disabled=!mouseReady;document.querySelector('#mouseHelp').textContent=s.keyboard_boot_protocol?'BIOS Boot 模式：点击画面后使用 Tab、方向键和 Enter 导航；按 Esc 暂停控制。':'启用后拖动画面移动指针，轻点画面点击；按 Esc 暂停控制。';if(s.error)error.textContent=s.error;else error.textContent=''}catch(e){statusLabel.textContent='连接中断';statusLabel.style.color='#ff9999';pause()}},1000);
 </script>
 </html>

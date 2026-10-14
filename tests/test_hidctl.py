@@ -48,6 +48,20 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(action=action), self.assertRaises(SystemExit):
                 hidctl.main(["--port", "unused", *action], peer_factory=lambda _: self.fail("Opened port before arming"))
 
+    def test_boot_and_suspended_status_extension_remains_optional(self):
+        for flags, expected in [(0, None), (0x86, (False, True, True)), (0x81, (True, False, False))]:
+            body = bytes((0x34, 0x80, 0x91, 0xC1, flags, 0))
+            state = hidctl.response(body + struct.pack(">H", hidctl.crc16(body)))
+            if expected is None:
+                self.assertNotIn("input_ready", state)
+            else:
+                self.assertEqual((state["usb_suspended"], state["input_ready"], state["keyboard_boot_protocol"]), expected)
+
+    def test_failed_hid_delivery_is_not_success(self):
+        body = bytes((0x34, 0x45, 0, 0, 0, 0))
+        with self.assertRaises(hidctl.ProtocolError):
+            hidctl.response(body + struct.pack(">H", hidctl.crc16(body)))
+
     def test_read_only_status_sends_only_ping(self):
         peer = FakePeer()
         with contextlib.redirect_stdout(io.StringIO()):
