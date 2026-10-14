@@ -20,8 +20,8 @@
 #include "tusb.h"
 #include "esp_mac.h"
 
-#if __has_include("config.h")
-#  include "config.h"
+#if __has_include("wifi_config.h")
+#  include "wifi_config.h"
 #  include <WiFi.h>
 #  include <ArduinoOTA.h>
 #  define HAVE_WIFI 1
@@ -32,6 +32,24 @@
 #define UART_RX_PIN   16
 #define UART_TX_PIN   17
 #define UART_BAUD     115200
+
+// The USB-UART build accepts control packets on the devkit's UART0 bridge.
+// Its native USB-OTG port remains a separate HID connection to the target.
+#if defined(PIKVM_CONTROL_USB_UART)
+#  define CONTROL_SERIAL Serial
+#  define DEBUG_PRINTLN(...) ((void)0)
+#  define DEBUG_PRINTF(...) ((void)0)
+#  define PREFS_NAMESPACE "pikvm-uart0"
+#  define DEFAULT_MOUSE_MODE OUT1_MOUSE_USB_REL
+#else
+#  define CONTROL_SERIAL Serial1
+#  define DEBUG_PRINTLN(...) Serial.println(__VA_ARGS__)
+#  define DEBUG_PRINTF(...) Serial.printf(__VA_ARGS__)
+#  define PREFS_NAMESPACE "pikvm"
+#  define DEFAULT_MOUSE_MODE OUT1_MOUSE_USB_ABS
+#endif
+
+#define INPUT_IDLE_TIMEOUT_MS 1500
 
 #define MAGIC_REQ           0x33
 #define MAGIC_RESP          0x34
@@ -88,6 +106,7 @@
 // ---- Absolute Mouse HID Device (not in Arduino standard library) ----
 static const uint8_t abs_mouse_report_desc[] = {
     0x05, 0x01, 0x09, 0x02, 0xA1, 0x01,
+    0x85, 0x03, // Absolute mouse reports use ID 3 alongside keyboard 1/mouse 2.
     0x09, 0x01, 0xA1, 0x00,
     0x05, 0x09, 0x19, 0x01, 0x29, 0x08,
     0x15, 0x00, 0x25, 0x01, 0x95, 0x08, 0x75, 0x01, 0x81, 0x02,
@@ -140,7 +159,7 @@ static USBHIDMouse RelMouse;
 static AbsMouse AbsMouseDev;
 
 static uint8_t active_kbd_mode   = OUT1_KBD_USB;
-static uint8_t active_mouse_mode = OUT1_MOUSE_USB_ABS;
+static uint8_t active_mouse_mode = DEFAULT_MOUSE_MODE;
 static uint8_t kbd_mods = 0, kbd_keys[6] = {0}, kbd_leds = 0;
 static uint8_t mouse_buttons = 0;
 static int16_t mouse_abs_x = 0, mouse_abs_y = 0;
@@ -153,6 +172,7 @@ static uint8_t rx_index = 0;
 static unsigned long rx_last_byte_ms = 0;
 static uint32_t stat_packets_ok = 0, stat_crc_errors = 0, stat_timeouts = 0;
 static unsigned long boot_ms = 0, last_status_ms = 0;
+static unsigned long last_packet_ms = 0;
 static char serial_str[18];
 
 #if HAVE_WIFI
@@ -195,7 +215,15 @@ static void send_abs_mouse_report(int8_t wheel) {
 static void send_rel_mouse_report(int8_t dx, int8_t dy, int8_t wheel) {
     if (!tud_mounted()) return;
     if (humanize_enabled) delayMicroseconds(esp_random() % 3000);
+    RelMouse.release((uint8_t)(~mouse_buttons));
+    RelMouse.press(mouse_buttons);
     RelMouse.move(dx, dy, wheel);
+}
+
+static bool input_is_held() {
+    if (kbd_mods || mouse_buttons) return true;
+    for (uint8_t key : kbd_keys) if (key) return true;
+    return false;
 }
 
 static void clear_all_hid() {
@@ -215,7 +243,11 @@ static void handle_kbd_key(uint8_t mcu_code, uint8_t state) {
         uint8_t mod_bit = 1 << (usb_key & 0x07);
         if (state) kbd_mods |= mod_bit; else kbd_mods &= ~mod_bit;
     } else {
-        if (state) { for (int i = 0; i < 6; i++) { if (kbd_keys[i] == usb_key) break; if (kbd_keys[i] == 0) { kbd_keys[i] = usb_key; break; } } }
+        if (state) {
+            bool present = false;
+            for (uint8_t key : kbd_keys) if (key == usb_key) present = true;
+            if (!present) for (uint8_t &key : kbd_keys) if (!key) { key = usb_key; break; }
+        }
         else { for (int i = 0; i < 6; i++) { if (kbd_keys[i] == usb_key) { kbd_keys[i] = 0; break; } } }
     }
     send_kbd_report();
@@ -231,8 +263,8 @@ static void handle_mouse_button(uint8_t m, uint8_t e) {
     else if ((active_mouse_mode & OUT1_MOUSE_MASK) == OUT1_MOUSE_USB_REL) send_rel_mouse_report(0, 0, 0);
 }
 
-static void load_output_modes() { prefs.begin("pikvm", true); active_kbd_mode = prefs.getUChar("kbd_mode", OUT1_KBD_USB); active_mouse_mode = prefs.getUChar("mouse_mode", OUT1_MOUSE_USB_ABS); humanize_enabled = prefs.getBool("humanize", false); prefs.end(); }
-static void save_output_modes() { prefs.begin("pikvm", false); prefs.putUChar("kbd_mode", active_kbd_mode); prefs.putUChar("mouse_mode", active_mouse_mode); prefs.putBool("humanize", humanize_enabled); prefs.end(); }
+static void load_output_modes() { prefs.begin(PREFS_NAMESPACE, true); active_kbd_mode = prefs.getUChar("kbd_mode", OUT1_KBD_USB); active_mouse_mode = prefs.getUChar("mouse_mode", DEFAULT_MOUSE_MODE); humanize_enabled = prefs.getBool("humanize", false); prefs.end(); }
+static void save_output_modes() { prefs.begin(PREFS_NAMESPACE, false); prefs.putUChar("kbd_mode", active_kbd_mode); prefs.putUChar("mouse_mode", active_mouse_mode); prefs.putBool("humanize", humanize_enabled); prefs.end(); }
 
 // ---- Protocol Response ----
 static void send_response(uint8_t code) {
@@ -255,7 +287,7 @@ static void send_response(uint8_t code) {
     uint16_t crc = crc16_modbus(resp, 6);
     resp[6] = (crc >> 8) & 0xFF;
     resp[7] = crc & 0xFF;
-    Serial1.write(resp, PACKET_SIZE);
+    CONTROL_SERIAL.write(resp, PACKET_SIZE);
 }
 
 // ---- Command Dispatcher ----
@@ -264,6 +296,7 @@ static void handle_packet(const uint8_t *data) {
     uint16_t rx_crc = ((uint16_t)data[6] << 8) | data[7];
     if (rx_crc != crc16_modbus(data, 6)) { stat_crc_errors++; send_response(RESP_CRC_ERROR); return; }
     stat_packets_ok++;
+    last_packet_ms = millis();
     uint8_t cmd = data[1];
     const uint8_t *args = data + 2;
     switch (cmd) {
@@ -288,7 +321,7 @@ static void handle_packet(const uint8_t *data) {
         case CMD_HUMANIZE:
             humanize_enabled = (args[0] != 0);
             save_output_modes();
-            Serial.printf("[humanize] %s\n", humanize_enabled ? "ON" : "OFF");
+            DEBUG_PRINTF("[humanize] %s\n", humanize_enabled ? "ON" : "OFF");
             send_response(PONG_OK); break;
         default: send_response(RESP_INVALID_ERROR); break;
     }
@@ -297,7 +330,7 @@ static void handle_packet(const uint8_t *data) {
 // ---- Setup ----
 void setup() {
     Serial.begin(115200);
-    Serial.println("\n[pikvm-hid] boot v2 (Arduino HID)");
+    DEBUG_PRINTLN("\n[pikvm-hid] boot v2 (Arduino HID)");
 
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -305,53 +338,51 @@ void setup() {
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     load_output_modes();
 
-    // Logitech USB Keyboard identity — macOS has a native profile for this
-    // VID/PID, so the Keyboard Setup Assistant dialog does not fire.
-    // For the conference demo this also makes the device fingerprint match
-    // a real Logitech keyboard rather than advertising itself as PiKVM.
-    // The mirror-device feature (see .planning/seeds) will make this
-    // runtime-configurable via voice once the NVS descriptor system lands.
-    USB.VID(0x046d);
-    USB.PID(0xc31c);
-    USB.manufacturerName("Logitech");
-    USB.productName("USB Keyboard");
+    USB.VID(0x1209);
+    USB.PID(0xEDA2);
+    USB.manufacturerName("PiKVM");
+    USB.productName("PiKVM ESP32-S3 HID");
     USB.serialNumber(serial_str);
     Keyboard.begin();
     AbsMouseDev.begin();
     RelMouse.begin();
     USB.begin();
 
+#if !defined(PIKVM_CONTROL_USB_UART)
     Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+#endif
     boot_ms = millis();
     delay(500);
-    Serial.printf("[pikvm-hid] mounted=%d\n", tud_mounted());
+    DEBUG_PRINTF("[pikvm-hid] mounted=%d\n", tud_mounted());
 
 #if HAVE_WIFI
     WiFi.setHostname(OTA_HOSTNAME);
     WiFi.setAutoReconnect(true);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.println("[pikvm-hid] wifi connecting...");
+    DEBUG_PRINTLN("[pikvm-hid] wifi connecting...");
     // OTA: once WiFi comes up, ArduinoOTA.begin() is called in loop().
     // Push firmware from Pi: pio run -e esp32s3_ota -t upload
     ArduinoOTA.setHostname(OTA_HOSTNAME);
 #  ifdef OTA_PASSWORD
     ArduinoOTA.setPassword(OTA_PASSWORD);
 #  endif
-    ArduinoOTA.onStart([]() { Serial.println("[ota] starting"); });
-    ArduinoOTA.onEnd([]()   { Serial.println("[ota] done — rebooting"); });
-    ArduinoOTA.onError([](ota_error_t e) { Serial.printf("[ota] error %u\n", e); });
+    ArduinoOTA.onStart([]() { DEBUG_PRINTLN("[ota] starting"); });
+    ArduinoOTA.onEnd([]()   { DEBUG_PRINTLN("[ota] done — rebooting"); });
+    ArduinoOTA.onError([](ota_error_t e) { DEBUG_PRINTF("[ota] error %u\n", e); });
 #endif
 }
 
 // ---- Main Loop ----
 void loop() {
     if (reset_required && reset_scheduled_at > 0) {
-        if (millis() - reset_scheduled_at >= 100) { Serial1.flush(); esp_restart(); }
+        if (millis() - reset_scheduled_at >= 100) { CONTROL_SERIAL.flush(); esp_restart(); }
         return;
     }
 
-    while (Serial1.available()) {
-        rx_buf[rx_index] = Serial1.read();
+    while (CONTROL_SERIAL.available()) {
+        uint8_t byte = CONTROL_SERIAL.read();
+        if (rx_index == 0 && byte != MAGIC_REQ) continue;
+        rx_buf[rx_index] = byte;
         if (rx_index == PACKET_SIZE - 1) { handle_packet(rx_buf); rx_index = 0; }
         else { rx_last_byte_ms = millis(); rx_index++; }
     }
@@ -362,6 +393,10 @@ void loop() {
         rx_index = 0;
     }
 
+    if (input_is_held() && (!tud_mounted() || millis() - last_packet_ms >= INPUT_IDLE_TIMEOUT_MS)) {
+        clear_all_hid();
+    }
+
 #if HAVE_WIFI
     ArduinoOTA.handle();
     if (WiFi.status() == WL_CONNECTED) {
@@ -369,7 +404,7 @@ void loop() {
             wifi_was_connected = true;
             tcp_server.begin();
             ArduinoOTA.begin();
-            Serial.printf("[pikvm-hid] wifi up ip=%s\n", WiFi.localIP().toString().c_str());
+            DEBUG_PRINTF("[pikvm-hid] wifi up ip=%s\n", WiFi.localIP().toString().c_str());
         }
         WiFiClient client = tcp_server.available();
         if (client) {
@@ -385,7 +420,7 @@ void loop() {
 
     if (millis() - last_status_ms >= 5000) {
         last_status_ms = millis();
-        Serial.printf("[status] up=%lus mounted=%d pkt=%lu crc=%lu\n",
+        DEBUG_PRINTF("[status] up=%lus mounted=%d pkt=%lu crc=%lu\n",
             (millis() - boot_ms) / 1000, tud_mounted(), stat_packets_ok, stat_crc_errors);
     }
 }

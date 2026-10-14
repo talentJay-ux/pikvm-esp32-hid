@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jay 远程画面</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101820;color:#eef4f8;font:16px system-ui,sans-serif}main{max-width:1380px;margin:auto;padding:24px}header{display:flex;align-items:center;gap:16px;flex-wrap:wrap}h1{font-size:24px;margin:0 auto 0 0}button{font:inherit;padding:10px 18px;border:1px solid #647686;border-radius:8px;background:#26394a;color:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:default}#state{color:#b5c1cc}p{color:#b5c1cc;line-height:1.5}img{width:100%;aspect-ratio:16/9;object-fit:contain;background:#000;border:2px solid #3e5060;border-radius:10px;outline:none}img.active{border-color:#64ce96}#error{color:#ff9999;min-height:24px}small{display:block;color:#b5c1cc;margin-top:12px}
+</style>
+<main><header><h1>Jay · HDMI 远程画面</h1><span id="state">正在连接</span><button id="arm" disabled>启用键鼠</button><button id="pause" disabled>暂停控制</button></header>
+<p>默认只观看。键鼠与 Windows 本地操作共享焦点，启用前请停止本地操作。</p>
+<img id="view" tabindex="0" src="/stream" alt="Jay HDMI 实时画面">
+<small>启用后点击画面锁定鼠标；按 Esc 退出并暂停控制。鼠标按相对移动控制。</small><p id="error"></p></main>
+<script>
+const view=document.querySelector('#view'), arm=document.querySelector('#arm'), pauseButton=document.querySelector('#pause'), statusLabel=document.querySelector('#state'), error=document.querySelector('#error');
+let token=null, chain=Promise.resolve();
+async function post(action,data={}){const r=await fetch('/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,token})});const d=await r.json();if(!r.ok)throw Error(d.error);return d}
+function clearLocal(){token=null;view.classList.remove('active');arm.disabled=false;pauseButton.disabled=true;if(document.pointerLockElement)document.exitPointerLock()}
+function pause(){const previous=token;clearLocal();if(previous)fetch('/pause',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:previous})}).catch(()=>{})}
+function input(data){if(!token)return;chain=chain.then(()=>token?post('input',data):null).catch(e=>{error.textContent=e.message;pause()})}
+arm.onclick=async()=>{try{const d=await post('arm');token=d.token;arm.disabled=true;pauseButton.disabled=false;view.classList.add('active');view.focus();error.textContent=''}catch(e){error.textContent=e.message}};
+pauseButton.onclick=pause;
+view.onclick=()=>{if(token&&!document.pointerLockElement)view.requestPointerLock()};
+document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement&&token)pause()});
+document.addEventListener('mousemove',e=>{if(document.pointerLockElement===view)input({kind:'move',dx:Math.max(-127,Math.min(127,Math.round(e.movementX))),dy:Math.max(-127,Math.min(127,Math.round(e.movementY)))})});
+for(const [event,down] of [['mousedown',true],['mouseup',false]])document.addEventListener(event,e=>{if(document.pointerLockElement===view&&e.button<=2){e.preventDefault();input({kind:'button',button:e.button,down})}});
+view.oncontextmenu=e=>e.preventDefault();
+view.addEventListener('wheel',e=>{if(token){e.preventDefault();input({kind:'wheel',dy:e.deltaY>0?-1:1})}},{passive:false});
+let keys={};fetch('/keymap').then(r=>r.json()).then(d=>{keys=d}).catch(e=>{error.textContent='键盘映射载入失败'}) ;
+for(const [event,down] of [['keydown',true],['keyup',false]])view.addEventListener(event,e=>{if(!token)return;if(e.code==='Escape'){e.preventDefault();pause();return}if(keys[e.code]&&!e.repeat){e.preventDefault();input({kind:'key',code:keys[e.code],down})}});
+window.addEventListener('blur',pause);document.addEventListener('visibilitychange',()=>{if(document.hidden)pause()});
+setInterval(async()=>{if(token)try{await post('heartbeat')}catch(e){error.textContent=e.message;pause()}},500);
+setInterval(async()=>{try{const s=await(await fetch('/status')).json();const online=s.usb_connected&&!s.error;statusLabel.textContent=online?(s.video_ready?'画面与键鼠在线':'键鼠在线 · 等待画面'):'键鼠连接中';statusLabel.style.color=online?'#64ce96':'#b5c1cc';if(!token)arm.disabled=!online||!keys.Enter;if(s.error)error.textContent=s.error;if(token&&!s.armed)clearLocal()}catch(e){statusLabel.textContent='连接中断';statusLabel.style.color='#ff9999';pause()}},1000);
+</script>
+</html>

@@ -1,0 +1,13 @@
+[Unit]
+Description=Jay dedicated HDMI capture and USB UART HID
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/jay-hid/venv/bin/python %h/.local/share/jay-hid/app/hidweb.py --port /dev/serial/by-id/YOUR_UART_BRIDGE --video /dev/v4l/by-id/YOUR_CAPTURE_CARD
+Restart=always
+RestartSec=3
+TimeoutStopSec=5
+
+[Install]
+WantedBy=default.target

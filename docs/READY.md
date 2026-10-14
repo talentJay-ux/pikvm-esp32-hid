@@ -64,7 +64,7 @@ Should show 3 HID interface entries under the device.
 With a USB-TTL adapter on GPIO16/17, send the PING packet and verify the response:
 
 ```
-# PING request:  33 01 00 00 00 00 C1 C0
+# PING request:  33 01 00 00 00 00 18 38
 # Expected pong: 34 89 89 01 00 00 XX XX  (XX XX = CRC)
 ```
 

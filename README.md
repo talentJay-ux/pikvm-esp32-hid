@@ -1,5 +1,7 @@
 # PiKVM ESP32-S3 HID
 
+For a Raspberry Pi connected through the devkit's USB-UART port (no GPIO wires), use the `esp32s3_usb_uart` build and follow [the two-USB wiring guide](docs/USB_UART.md).
+
 **Wire-compatible drop-in replacement for the [PiKVM Pico HID](https://github.com/pikvm/pico-hid-usb) using an ESP32-S3-N16R8.**
 
 PiKVM v3+ uses a Raspberry Pi Pico as a USB HID gadget, connected to the host Pi via UART. The Pico runs firmware that translates serial commands into USB HID reports for keyboard, absolute mouse, and boot relative mouse. This project ports that firmware to the ESP32-S3, which has native USB-OTG and is widely available.
@@ -76,7 +78,7 @@ pio run --target upload                        # flash via CH343 "UART" port
 
 ### Optional: WiFi debug
 
-Copy `src/config.h.example` to `src/config.h` and fill in your WiFi credentials. When `config.h` is present, the firmware connects to WiFi and serves a JSON status page on port 80. When absent, WiFi is compiled out entirely.
+Copy `src/wifi_config.h.example` to `src/wifi_config.h` and fill in your WiFi credentials. When `wifi_config.h` is present, the firmware connects to WiFi and serves a JSON status page on port 80. When absent, WiFi is compiled out entirely.
 
 After flash, plug the **"USB" port** into a host PC. The host should see:
 
